@@ -1,0 +1,74 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: terraform-operator-plugin-manager
+  namespace: tf-system
+spec:
+  replicas: 1
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 25%
+      maxUnavailable: 25%
+  selector:
+    matchLabels:
+      app: terraform-operator-plugin-manager
+      component: manager
+  template:
+    metadata:
+      labels:
+        app: terraform-operator-plugin-manager
+        component: manager
+    spec:
+      serviceAccountName: terraform-operator-plugin-manager
+      containers:
+      - name: terraform-operator-plugin-manager
+        image: "ghcr.io/galleybytes/terraform-operator-plugin-manager:0.0.0"
+        imagePullPolicy: IfNotPresent
+        env:
+        - name: API_USERNAME
+          value: isa
+        - name: API_PASSWORD
+          value: 1st t1me ch4rm!
+        args:
+        - -namespace=tf-system
+        - -api=http://terraform-operator-api.tf-system.svc
+        - -tls-key=/certs/tls.key
+        - -tls-cert=/certs/tls.crt
+        - -ca-cert=/certs/ca.crt
+        - -ca-key=/certs/ca.key
+        - -mutating-webhook-configuration-name=terraform-operator-plugin-manager
+        - -service-name=terraform-operator-plugin-manager
+        - -secret-name=terraform-operator-plugin-manager-certs # Secret to store the webhook cert
+        resources:
+          limits:
+            cpu: 50m
+            memory: 128M
+          requests:
+            cpu: 25m
+            memory: 128M
+        ports:
+        - name: https
+          containerPort: 8443
+          protocol: TCP
+        volumeMounts:
+        - name: certs
+          mountPath: /certs
+          readOnly: true
+        - name: plugin-mutations
+          mountPath: /plugin
+      volumes:
+      - name: certs
+        secret:
+          secretName: terraform-operator-plugin-manager-certs # Secret to store the webhook cert, must match the env '--secret-name'
+          optional: true
+          defaultMode: 0600
+      - name: plugin-mutations
+        configMap:
+          name: terraform-opeartor-plugin-mutations
+          defaultMode: 0644
+          items:
+          - key: mutations.json
+            path: mutations.json
+
+
