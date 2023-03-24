@@ -287,7 +287,21 @@ func (m *mutationHandler) mutate(ar admission.AdmissionReview) *admission.Admiss
 		}
 	}
 
-	terraformPatch, err := json.Marshal(patch)
+	realPatch := []jsonpatch.JsonPatchOperation{}
+	for _, p := range patch {
+		if strings.HasPrefix(p.Path, "/status") {
+			continue
+		}
+		realPatch = append(realPatch, p)
+		log.Println(p)
+	}
+
+	if len(realPatch) == 0 {
+		log.Println("No patches to do")
+		return nilPatch()
+	}
+
+	patchJSON, err := json.Marshal(realPatch)
 	if err != nil {
 		return &admission.AdmissionResponse{
 			Result: &metav1.Status{
@@ -295,10 +309,7 @@ func (m *mutationHandler) mutate(ar admission.AdmissionReview) *admission.Admiss
 			},
 		}
 	}
-	for _, p := range patch {
-		log.Println(p)
-	}
-	return &admission.AdmissionResponse{Allowed: true, PatchType: &jsonPatchType, Patch: terraformPatch}
+	return &admission.AdmissionResponse{Allowed: true, PatchType: &jsonPatchType, Patch: patchJSON}
 }
 
 func ls(dir string) []fs.FileInfo {
