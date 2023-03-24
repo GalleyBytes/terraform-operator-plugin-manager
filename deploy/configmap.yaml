@@ -43,11 +43,7 @@ data:
             "name": "data",
             "value": "engineering"
           }
-        ],
-        "script": {
-          "source": "too bad so sad"
-
-        }
+        ]
       }
     }
   # mutations.json: |-
