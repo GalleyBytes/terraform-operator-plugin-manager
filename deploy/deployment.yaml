@@ -23,7 +23,7 @@ spec:
       serviceAccountName: terraform-operator-plugin-manager
       containers:
       - name: terraform-operator-plugin-manager
-        image: "ghcr.io/galleybytes/terraform-operator-plugin-manager:0.0.0"
+        image: "ghcr.io/galleybytes/terraform-operator-plugin-manager:0.1.0"
         imagePullPolicy: IfNotPresent
         env:
         - name: API_USERNAME
@@ -67,8 +67,3 @@ spec:
         configMap:
           name: terraform-opeartor-plugin-mutations
           defaultMode: 0644
-          # items:
-          # - key: mutations.json
-          #   path: mutations.json
-
-
