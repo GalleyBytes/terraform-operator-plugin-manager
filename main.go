@@ -32,7 +32,7 @@ var (
 	serviceName                      string
 	secretName                       string
 	// TFO Plugin Mutations
-	pluginMutationsFilename string
+	pluginMutationsFilepath string
 	// API access
 	apiServiceHost string
 	apiUsername    string
@@ -49,7 +49,7 @@ func getFlags() {
 	flag.StringVar(&mutatingWebhookConfigurationName, "mutating-webhook-configuration-name", "terraform-operator-plugin-manager", "Name of webhook resource")
 	flag.StringVar(&apiServiceHost, "api", "http://terraform-operator-api.tf-system.svc", "TFO api host - proto://host:port")
 	flag.StringVar(&serviceName, "service-name", "terraform-operator-plugin-manager", "Name of the service to back up mutating webhook configuration")
-	flag.StringVar(&pluginMutationsFilename, "plugin-mutations", "/plugin/mutations.json", "Path to plugin mutations")
+	flag.StringVar(&pluginMutationsFilepath, "plugin-mutations", "/plugins", "Path to plugin mutations")
 	flag.Parse()
 
 	apiUsername = os.Getenv("API_USERNAME")
@@ -421,5 +421,5 @@ func main() {
 	go mgr.certMgmt()
 
 	<-mgr.isReadyCh
-	webserver.Run(tlsCertFilename, tlsKeyFilename, pluginMutationsFilename, apiServiceHost, apiUsername, apiPassword)
+	webserver.Run(tlsCertFilename, tlsKeyFilename, pluginMutationsFilepath, apiServiceHost, apiUsername, apiPassword)
 }

@@ -3,15 +3,62 @@ kind: ConfigMap
 metadata:
   name: terraform-opeartor-plugin-mutations
 data:
-  mutations.json: |-
+  bbox.json: |-
     {
-      "monitor": {
-        "image": "ghcr.io/galleybytes/monitor:0.1.3",
-        "image_pull_policy": "IfNotPresent",
-        "escape_key": "tfomanager.galleybytes.com/monitor",
-        "config_map_key_map": {
-          "CLUSTER_NAME": "kind-kind",
-          "MONITOR_MANAGER_SERVICE_HOST": "https://terraform-operator-plugin-manager.tf-system.svc"
+      "pluginConfig": {
+        "image": "busybox:latest",
+        "imagePullPolicy": "IfNotPresent",
+        "when": "At",
+        "task": "init"
+      },
+      "taskConfig": {
+        "env": [
+          {
+            "name": "change",
+            "value": "log"
+          },
+          {
+            "name": "dog",
+            "value": "triangle"
+          }
+        ],
+        "restartPolicy": "Never"
+      }
+    }
+  ubuntu.json: |-
+    {
+      "pluginConfig": {
+        "image": "ubuntu:latest",
+        "imagePullPolicy": "IfNotPresent",
+        "when": "At",
+        "task": "init"
+      },
+      "taskConfig": {
+        "env": [
+          {
+            "name": "big",
+            "value": "bang"
+          },
+          {
+            "name": "data",
+            "value": "engineering"
+          }
+        ],
+        "script": {
+          "source": "too bad so sad"
+
         }
       }
     }
+  # mutations.json: |-
+  #   {
+  #     "monitor": {
+  #       "image": "ghcr.io/galleybytes/monitor:0.1.3",
+  #       "image_pull_policy": "IfNotPresent",
+  #       "escape_key": "tfomanager.galleybytes.com/monitor",
+  #       "config_map_key_map": {
+  #         "CLUSTER_NAME": "kind-kind",
+  #         "MONITOR_MANAGER_SERVICE_HOST": "https://terraform-operator-plugin-manager.tf-system.svc"
+  #       }
+  #     }
+  #   }

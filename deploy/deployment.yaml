@@ -56,7 +56,7 @@ spec:
           mountPath: /certs
           readOnly: true
         - name: plugin-mutations
-          mountPath: /plugin
+          mountPath: /plugins
       volumes:
       - name: certs
         secret:
@@ -67,8 +67,8 @@ spec:
         configMap:
           name: terraform-opeartor-plugin-mutations
           defaultMode: 0644
-          items:
-          - key: mutations.json
-            path: mutations.json
+          # items:
+          # - key: mutations.json
+          #   path: mutations.json
 
 

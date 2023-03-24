@@ -5,9 +5,12 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"io/ioutil"
 	"log"
 	"net/http"
+	"path/filepath"
+	"strings"
 
 	tfv1alpha2 "github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha2"
 	"github.com/mattbaird/jsonpatch"
@@ -31,13 +34,41 @@ func init() {
 	_ = tfv1alpha2.AddToScheme(runtimeScheme)
 }
 
-type access struct {
+type pluginOption struct {
+	SkipAnnotaiton string                `json:"skipAnnotation"`
+	PluginConfig   tfv1alpha2.Plugin     `json:"pluginConfig"`
+	TaskOption     tfv1alpha2.TaskOption `json:"taskConfig"`
+}
+
+type accessHandler struct {
 	apiServiceHost string
 	apiUsername    string
 	apiPassword    string
 }
 
-func (a access) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+type mutationHandler struct {
+	pluginMutationsFilepath string
+	resource                metav1.GroupVersionResource
+}
+
+func newPluginOption(dir, file string) (*pluginOption, error) {
+	var opt pluginOption
+	filename := filepath.Join(dir, file)
+	b, err := ioutil.ReadFile(filename)
+	if err != nil {
+		return nil, fmt.Errorf("Error reading plugin mutations file '%s'", filename)
+		// return nilPatch()
+	}
+
+	err = json.Unmarshal(b, &opt)
+	if err != nil {
+		return nil, fmt.Errorf("Error parsing plugin data from file '%s'", filename)
+	}
+
+	return &opt, nil
+}
+
+func (a accessHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	url := fmt.Sprintf("%s/login", a.apiServiceHost)
 	tr := &http.Transport{
 		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
@@ -84,140 +115,158 @@ func (a access) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, `{"host": "%s", "token": "%s"}`, a.apiServiceHost, loginResponseData.Data[0])
 }
 
-type pluginMutation struct {
-	Image           string            `json:"image"`
-	ImagePullPolicy corev1.PullPolicy `json:"image_pull_policy"`
-	EscapeKey       string            `json:"escape_key"`
-	ConfigMapKeyMap map[string]string `json:"config_map_key_map"`
-}
-
-type mutationHandler struct {
-	pluginMutationsFilename string
-	pluginMutations         map[tfv1alpha2.TaskName]pluginMutation
-}
-
 func (m mutationHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+
 	admissionHandler(w, r, m.mutate)
 }
 
-func (m *mutationHandler) mutate(ar admission.AdmissionReview) *admission.AdmissionResponse {
-	b, err := ioutil.ReadFile(m.pluginMutationsFilename)
-	if err != nil {
-		log.Printf("Error reading plugin mutations file '%s'", m.pluginMutationsFilename)
-		return nilPatch()
+// pluginExists checks existance of plugins in the spec and checks if the plugin already exists
+func (m mutationHandler) updatePlugins(tf *tfv1alpha2.Terraform, pluginName tfv1alpha2.TaskName, plugin tfv1alpha2.Plugin) bool {
+	if tf.Spec.Plugins == nil {
+		tf.Spec.Plugins = make(map[tfv1alpha2.TaskName]tfv1alpha2.Plugin)
 	}
-
-	err = json.Unmarshal(b, &m.pluginMutations)
-	if err != nil {
-		log.Printf("Error parsing plugin mutations file '%s'", m.pluginMutationsFilename)
-		return nilPatch()
-	}
-
-	group := tfv1alpha2.SchemeGroupVersion.Group
-	version := tfv1alpha2.SchemeGroupVersion.Version
-	terraformResource := metav1.GroupVersionResource{Group: group, Version: version, Resource: "terraforms"}
-	if ar.Request.Resource != terraformResource {
-		log.Printf("expect resource to be %s", terraformResource)
-		return nil
-	}
-	raw := ar.Request.Object.Raw
-	terraform := tfv1alpha2.Terraform{}
-
-	if _, _, err := deserializer.Decode(raw, nil, &terraform); err != nil {
-		log.Println(err)
-		return &admission.AdmissionResponse{
-			Result: &metav1.Status{
-				Message: err.Error(),
-			},
+	for key := range tf.Spec.Plugins {
+		if string(key) == string(pluginName) {
+			return true
 		}
 	}
+	tf.Spec.Plugins[pluginName] = plugin
+	return false
+}
 
-	for name, mutation := range m.pluginMutations {
+func doSkip(tf *tfv1alpha2.Terraform, skipKey string) bool {
+	if tf.ObjectMeta.Annotations == nil {
+		tf.ObjectMeta.Annotations = make(map[string]string)
+	}
 
-		// After the decode process, check if the resource needs mutations
-		if terraform.ObjectMeta.Annotations == nil {
-			terraform.ObjectMeta.Annotations = make(map[string]string)
-		} else if _, found := terraform.ObjectMeta.Annotations[mutation.EscapeKey]; found {
-			// An escape route from mutating based on annotations
+	if _, found := tf.ObjectMeta.Annotations[skipKey]; found {
+		return true
+	}
+	return false
+
+}
+
+// findTaskOptionIndex returns the index only when all the following are met:
+//  1. `spec.taskOptions` exist
+//  2. the `for` list only contains a single item
+//  3. the item in the `for` list is the pluginName
+func findTaskOptionIndex(tf *tfv1alpha2.Terraform, pluginName tfv1alpha2.TaskName) int {
+	for i, taskOption := range tf.Spec.TaskOptions {
+		if len(taskOption.For) == 1 {
+			if taskOption.For[0] == pluginName {
+				return i
+			}
+		}
+	}
+	return -1
+}
+
+func mergeTaskOptions(oldTaskOption, newTaskOption tfv1alpha2.TaskOption) tfv1alpha2.TaskOption {
+	envIndexMap := map[string]int{}
+	envFromIndexMap := map[corev1.EnvFromSource]int{}
+	for i, env := range newTaskOption.Env {
+		envIndexMap[env.Name] = i
+	}
+	for i, envFromSource := range newTaskOption.EnvFrom {
+		envFromIndexMap[envFromSource] = i
+	}
+
+	for i, env := range oldTaskOption.Env {
+		if _, found := envIndexMap[env.Name]; !found {
+			continue
+		}
+		oldTaskOption.Env[i] = newTaskOption.Env[envIndexMap[env.Name]]
+		delete(envIndexMap, env.Name)
+
+	}
+	for _, i := range envIndexMap {
+		oldTaskOption.Env = append(oldTaskOption.Env, newTaskOption.Env[i])
+	}
+
+	for i, envFromSource := range oldTaskOption.EnvFrom {
+		if _, found := envFromIndexMap[envFromSource]; !found {
+			continue
+		}
+		oldTaskOption.EnvFrom[i] = newTaskOption.EnvFrom[envFromIndexMap[envFromSource]]
+		delete(envFromIndexMap, envFromSource)
+	}
+	for _, i := range envFromIndexMap {
+		oldTaskOption.EnvFrom = append(oldTaskOption.EnvFrom, newTaskOption.EnvFrom[i])
+	}
+
+	// TODO policyRules
+
+	for k, v := range newTaskOption.Labels {
+		oldTaskOption.Labels[k] = v
+	}
+	for k, v := range newTaskOption.Annotations {
+		oldTaskOption.Annotations[k] = v
+	}
+
+	oldTaskOption.RestartPolicy = newTaskOption.RestartPolicy
+	oldTaskOption.Resources = newTaskOption.Resources
+	newTaskOption.Script.DeepCopyInto(&oldTaskOption.Script)
+
+	return oldTaskOption
+}
+
+func (m *mutationHandler) mutate(ar admission.AdmissionReview) *admission.AdmissionResponse {
+	if ar.Request.Resource != m.resource {
+		log.Printf("WARNING Expect resource to be %s", m.resource)
+		return nilPatch()
+	}
+	objectJSON := ar.Request.Object.Raw
+	terraform, err := decodeTerraform(objectJSON)
+	if err != nil {
+		log.Println(err)
+		return &admission.AdmissionResponse{Result: &metav1.Status{Message: err.Error()}}
+	}
+
+	for _, file := range ls(m.pluginMutationsFilepath) {
+		if file.IsDir() {
+			continue
+		}
+		filename := file.Name()
+		if !strings.HasSuffix(filename, ".json") {
+			continue
+		}
+		pluginName := tfv1alpha2.TaskName(strings.TrimSuffix(filename, ".json"))
+
+		opt, err := newPluginOption(m.pluginMutationsFilepath, filename)
+		if err != nil {
 			return nilPatch()
 		}
 
-		if terraform.Spec.Plugins == nil {
-			terraform.Spec.Plugins = make(map[tfv1alpha2.TaskName]tfv1alpha2.Plugin)
-		} else {
-			for key := range terraform.Spec.Plugins {
-				if key == name {
-					log.Printf("Overwriting existing '%s' plugin", name)
-				}
-			}
+		// Every plugin config has the option to not mutate if the resource contains the escape key
+		if doSkip(terraform, opt.SkipAnnotaiton) {
+			continue
 		}
 
-		terraform.Spec.Plugins[name] = tfv1alpha2.Plugin{
-			ImageConfig: tfv1alpha2.ImageConfig{
-				Image:           mutation.Image,
-				ImagePullPolicy: mutation.ImagePullPolicy,
-			},
-			Task: tfv1alpha2.RunSetup,
-			When: "After",
+		if m.updatePlugins(terraform, pluginName, opt.PluginConfig) {
+			log.Printf("Overwriting existing '%s' plugin", pluginName)
 		}
 
 		if terraform.Spec.TaskOptions == nil {
 			terraform.Spec.TaskOptions = []tfv1alpha2.TaskOption{}
 		}
 
-		taskOptionIndex := -1
-		for i, taskOption := range terraform.Spec.TaskOptions {
-			// Check for the existence of the plugin in task options to append to it and not completely replace it
-			if len(taskOption.For) == 1 {
-				if taskOption.For[0] == name {
-					log.Printf("Found taskOptions for %s", name)
-					taskOptionIndex = i
-				}
-			}
-		}
-
+		taskOptionIndex := findTaskOptionIndex(terraform, pluginName)
 		if taskOptionIndex > -1 {
-			// Monitor exists, now check the envs to update
-			for i, env := range terraform.Spec.TaskOptions[taskOptionIndex].Env {
-				if val, found := mutation.ConfigMapKeyMap[env.Name]; found {
-					log.Printf("Found env '%s' in index %d of '%s' taskOption", env.Name, i, name)
-					terraform.Spec.TaskOptions[taskOptionIndex].Env[i] = corev1.EnvVar{
-						Name:  env.Name,
-						Value: val,
-					}
-					delete(mutation.ConfigMapKeyMap, env.Name)
-				}
-			}
-
-			// Generate new envs from the remaining keys
-			envs := []corev1.EnvVar{}
-
-			for key, val := range mutation.ConfigMapKeyMap {
-				fmt.Printf("Adding new env '%s' to envs of '%s' taskOption", key, name)
-				envs = append(envs, corev1.EnvVar{
-					Name:  key,
-					Value: val,
-				})
-			}
-
-			terraform.Spec.TaskOptions[taskOptionIndex].Env = append(terraform.Spec.TaskOptions[taskOptionIndex].Env, envs...)
-			terraform.Spec.TaskOptions[taskOptionIndex].RestartPolicy = corev1.RestartPolicyAlways
+			// Special consideration for mutating here becuase there are arrays of complex objects to take into account
+			terraform.Spec.TaskOptions[taskOptionIndex] = mergeTaskOptions(terraform.Spec.TaskOptions[taskOptionIndex], opt.TaskOption)
+			// opt.TaskOption.DeepCopyInto(&)
 		} else {
-			envs := []corev1.EnvVar{}
-
-			for key, val := range mutation.ConfigMapKeyMap {
-				log.Printf("Adding new env '%s' to envs of '%s' taskOption", key, name)
-				envs = append(envs, corev1.EnvVar{
-					Name:  key,
-					Value: val,
-				})
-			}
-			terraform.Spec.TaskOptions = append(terraform.Spec.TaskOptions, tfv1alpha2.TaskOption{
-				For:           []tfv1alpha2.TaskName{name},
-				Env:           envs,
-				RestartPolicy: corev1.RestartPolicyAlways,
-			})
+			terraform.Spec.TaskOptions = append(terraform.Spec.TaskOptions, opt.TaskOption)
+			taskOptionIndex = len(terraform.Spec.TaskOptions) - 1
 		}
+		// Ensure ONLY this plugin
+		terraform.Spec.TaskOptions[taskOptionIndex].For = []tfv1alpha2.TaskName{pluginName}
+		if terraform.Spec.TaskOptions[taskOptionIndex].RestartPolicy == "" {
+			terraform.Spec.TaskOptions[taskOptionIndex].RestartPolicy = corev1.RestartPolicyAlways
+		}
+
+		_ = corev1.Pod{}
+
 	}
 
 	targetJson, err := json.Marshal(terraform)
@@ -229,7 +278,7 @@ func (m *mutationHandler) mutate(ar admission.AdmissionReview) *admission.Admiss
 		}
 	}
 
-	patch, err := jsonpatch.CreatePatch(raw, targetJson)
+	patch, err := jsonpatch.CreatePatch(objectJSON, targetJson)
 	if err != nil {
 		return &admission.AdmissionResponse{
 			Result: &metav1.Status{
@@ -250,6 +299,23 @@ func (m *mutationHandler) mutate(ar admission.AdmissionReview) *admission.Admiss
 		log.Println(p)
 	}
 	return &admission.AdmissionResponse{Allowed: true, PatchType: &jsonPatchType, Patch: terraformPatch}
+}
+
+func ls(dir string) []fs.FileInfo {
+	b, err := ioutil.ReadDir(dir)
+	if err != nil {
+		log.Panic(err)
+	}
+	return b
+}
+
+func decodeTerraform(raw []byte) (*tfv1alpha2.Terraform, error) {
+	terraform := tfv1alpha2.Terraform{}
+
+	if _, _, err := deserializer.Decode(raw, nil, &terraform); err != nil {
+		return nil, err
+	}
+	return &terraform, nil
 }
 
 // admissionHandler handles the http portion of a request prior to handing to an admissionFunc function
@@ -307,13 +373,20 @@ func nilPatch() *admission.AdmissionResponse {
 	return &admission.AdmissionResponse{Allowed: true, PatchType: &jsonPatchType, Patch: []byte("[]")}
 }
 
+func terraformsResource() metav1.GroupVersionResource {
+	group := tfv1alpha2.SchemeGroupVersion.Group
+	version := tfv1alpha2.SchemeGroupVersion.Version
+	return metav1.GroupVersionResource{Group: group, Version: version, Resource: "terraforms"}
+}
+
 // Run starts the webserver and blocks
-func Run(tlsCertFilename, tlsKeyFilename, pluginMutationsFilename, apiServiceHost, apiUsername, apiPassword string) {
+func Run(tlsCertFilename, tlsKeyFilename, pluginMutationsFilepath, apiServiceHost, apiUsername, apiPassword string) {
 	server := http.NewServeMux()
 	server.Handle("/mutate", mutationHandler{
-		pluginMutationsFilename: pluginMutationsFilename,
+		pluginMutationsFilepath: pluginMutationsFilepath,
+		resource:                terraformsResource(),
 	})
-	server.Handle("/api-token-please", access{
+	server.Handle("/api-token-please", accessHandler{
 		apiServiceHost: apiServiceHost,
 		apiUsername:    apiUsername,
 		apiPassword:    apiPassword,
