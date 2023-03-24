@@ -227,10 +227,12 @@ func (m *mutationHandler) mutate(ar admission.AdmissionReview) *admission.Admiss
 			continue
 		}
 		filename := file.Name()
-		if !strings.HasSuffix(filename, ".json") {
+		if strings.HasPrefix(filename, ".") {
 			continue
 		}
-		pluginName := tfv1alpha2.TaskName(strings.TrimSuffix(filename, ".json"))
+		log.Println(filename)
+
+		pluginName := tfv1alpha2.TaskName(filename)
 
 		opt, err := newPluginOption(m.pluginMutationsFilepath, filename)
 		if err != nil {
@@ -391,17 +393,13 @@ func terraformsResource() metav1.GroupVersionResource {
 }
 
 // Run starts the webserver and blocks
-func Run(tlsCertFilename, tlsKeyFilename, pluginMutationsFilepath, apiServiceHost, apiUsername, apiPassword string) {
+func Run(tlsCertFilename, tlsKeyFilename, pluginMutationsFilepath string) {
 	server := http.NewServeMux()
 	server.Handle("/mutate", mutationHandler{
 		pluginMutationsFilepath: pluginMutationsFilepath,
 		resource:                terraformsResource(),
 	})
-	server.Handle("/api-token-please", accessHandler{
-		apiServiceHost: apiServiceHost,
-		apiUsername:    apiUsername,
-		apiPassword:    apiPassword,
-	})
+
 	log.Printf("Server started ...")
 	err := http.ListenAndServeTLS(":8443", tlsCertFilename, tlsKeyFilename, server)
 	log.Fatal(err)

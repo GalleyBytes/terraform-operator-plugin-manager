@@ -421,5 +421,5 @@ func main() {
 	go mgr.certMgmt()
 
 	<-mgr.isReadyCh
-	webserver.Run(tlsCertFilename, tlsKeyFilename, pluginMutationsFilepath, apiServiceHost, apiUsername, apiPassword)
+	webserver.Run(tlsCertFilename, tlsKeyFilename, pluginMutationsFilepath)
 }

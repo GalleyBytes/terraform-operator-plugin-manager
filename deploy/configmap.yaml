@@ -3,7 +3,7 @@ kind: ConfigMap
 metadata:
   name: terraform-opeartor-plugin-mutations
 data:
-  bbox.json: |-
+  bboxtest: |-
     {
       "pluginConfig": {
         "image": "busybox:latest",
@@ -25,7 +25,7 @@ data:
         "restartPolicy": "Never"
       }
     }
-  ubuntu.json: |-
+  ubuntutest: |-
     {
       "pluginConfig": {
         "image": "ubuntu:latest",
