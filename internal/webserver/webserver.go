@@ -1,8 +1,6 @@
 package webserver
 
 import (
-	"bytes"
-	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io/fs"
@@ -40,12 +38,6 @@ type pluginOption struct {
 	TaskOption     tfv1alpha2.TaskOption `json:"taskConfig"`
 }
 
-type accessHandler struct {
-	apiServiceHost string
-	apiUsername    string
-	apiPassword    string
-}
-
 type mutationHandler struct {
 	pluginMutationsFilepath string
 	resource                metav1.GroupVersionResource
@@ -68,53 +60,6 @@ func newPluginOption(dir, file string) (*pluginOption, error) {
 	return &opt, nil
 }
 
-func (a accessHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	url := fmt.Sprintf("%s/login", a.apiServiceHost)
-	tr := &http.Transport{
-		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-	}
-	client := &http.Client{Transport: tr}
-
-	jsonData, err := json.Marshal(map[string]interface{}{
-		"user":     a.apiUsername,
-		"password": a.apiPassword,
-	})
-	if err != nil {
-		log.Panic(err)
-	}
-
-	request, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
-	if err != nil {
-		log.Panic(err)
-	}
-
-	request.Header.Set("Content-Type", "application/json; charset=UTF-8")
-	response, err := client.Do(request)
-	if err != nil {
-		log.Panic(err)
-	}
-	defer response.Body.Close()
-
-	if response.StatusCode != 200 {
-		log.Panicf("Request to %s returned a %d but expected 200", request.URL, response.StatusCode)
-	}
-
-	responseBody, err := ioutil.ReadAll(response.Body)
-	if err != nil {
-		log.Panic(err)
-	}
-
-	loginResponseData := struct {
-		Data []string `json:"data"`
-	}{}
-	err = json.Unmarshal(responseBody, &loginResponseData)
-	if err != nil {
-		log.Panic(err)
-	}
-
-	fmt.Fprintf(w, `{"host": "%s", "token": "%s"}`, a.apiServiceHost, loginResponseData.Data[0])
-}
-
 func (m mutationHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	admissionHandler(w, r, m.mutate)
@@ -122,16 +67,18 @@ func (m mutationHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 // pluginExists checks existance of plugins in the spec and checks if the plugin already exists
 func (m mutationHandler) updatePlugins(tf *tfv1alpha2.Terraform, pluginName tfv1alpha2.TaskName, plugin tfv1alpha2.Plugin) bool {
+	// overwrites is only used to determine is the plugin was an overwrite or a new plugin definition
+	var overwrites = false
 	if tf.Spec.Plugins == nil {
 		tf.Spec.Plugins = make(map[tfv1alpha2.TaskName]tfv1alpha2.Plugin)
 	}
 	for key := range tf.Spec.Plugins {
 		if string(key) == string(pluginName) {
-			return true
+			overwrites = true
 		}
 	}
 	tf.Spec.Plugins[pluginName] = plugin
-	return false
+	return overwrites
 }
 
 func doSkip(tf *tfv1alpha2.Terraform, skipKey string) bool {
