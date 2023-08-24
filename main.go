@@ -260,8 +260,8 @@ func (m Manager) createOrUpdateMutatingWebhookConfiguration() {
 				{
 					Operations: []addmissionregistrationv1.OperationType{addmissionregistrationv1.Create, addmissionregistrationv1.Update},
 					Rule: addmissionregistrationv1.Rule{
-						APIGroups:   []string{"tf.isaaguilar.com"},
-						APIVersions: []string{"v1alpha2"},
+						APIGroups:   []string{"tf.galleybytes.com"},
+						APIVersions: []string{"v1beta1"},
 						Resources:   []string{"terraforms"},
 					},
 				},

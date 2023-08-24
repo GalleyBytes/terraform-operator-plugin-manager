@@ -10,7 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	tfv1alpha2 "github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha2"
+	tfv1beta1 "github.com/galleybytes/terraform-operator/pkg/apis/tf/v1beta1"
 	"github.com/mattbaird/jsonpatch"
 	admission "k8s.io/api/admission/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -29,13 +29,13 @@ var (
 // add kind AdmissionReview in scheme
 func init() {
 	_ = admission.AddToScheme(runtimeScheme)
-	_ = tfv1alpha2.AddToScheme(runtimeScheme)
+	_ = tfv1beta1.AddToScheme(runtimeScheme)
 }
 
 type pluginOption struct {
-	SkipAnnotaiton string                `json:"skipAnnotation"`
-	PluginConfig   tfv1alpha2.Plugin     `json:"pluginConfig"`
-	TaskOption     tfv1alpha2.TaskOption `json:"taskConfig"`
+	SkipAnnotaiton string               `json:"skipAnnotation"`
+	PluginConfig   tfv1beta1.Plugin     `json:"pluginConfig"`
+	TaskOption     tfv1beta1.TaskOption `json:"taskConfig"`
 }
 
 type mutationHandler struct {
@@ -66,11 +66,11 @@ func (m mutationHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 // pluginExists checks existance of plugins in the spec and checks if the plugin already exists
-func (m mutationHandler) updatePlugins(tf *tfv1alpha2.Terraform, pluginName tfv1alpha2.TaskName, plugin tfv1alpha2.Plugin) bool {
+func (m mutationHandler) updatePlugins(tf *tfv1beta1.Terraform, pluginName tfv1beta1.TaskName, plugin tfv1beta1.Plugin) bool {
 	// overwrites is only used to determine is the plugin was an overwrite or a new plugin definition
 	var overwrites = false
 	if tf.Spec.Plugins == nil {
-		tf.Spec.Plugins = make(map[tfv1alpha2.TaskName]tfv1alpha2.Plugin)
+		tf.Spec.Plugins = make(map[tfv1beta1.TaskName]tfv1beta1.Plugin)
 	}
 	for key := range tf.Spec.Plugins {
 		if string(key) == string(pluginName) {
@@ -81,7 +81,7 @@ func (m mutationHandler) updatePlugins(tf *tfv1alpha2.Terraform, pluginName tfv1
 	return overwrites
 }
 
-func doSkip(tf *tfv1alpha2.Terraform, skipKey string) bool {
+func doSkip(tf *tfv1beta1.Terraform, skipKey string) bool {
 	if tf.ObjectMeta.Annotations == nil {
 		tf.ObjectMeta.Annotations = make(map[string]string)
 	}
@@ -97,7 +97,7 @@ func doSkip(tf *tfv1alpha2.Terraform, skipKey string) bool {
 //  1. `spec.taskOptions` exist
 //  2. the `for` list only contains a single item
 //  3. the item in the `for` list is the pluginName
-func findTaskOptionIndex(tf *tfv1alpha2.Terraform, pluginName tfv1alpha2.TaskName) int {
+func findTaskOptionIndex(tf *tfv1beta1.Terraform, pluginName tfv1beta1.TaskName) int {
 	for i, taskOption := range tf.Spec.TaskOptions {
 		if len(taskOption.For) == 1 {
 			if taskOption.For[0] == pluginName {
@@ -108,7 +108,7 @@ func findTaskOptionIndex(tf *tfv1alpha2.Terraform, pluginName tfv1alpha2.TaskNam
 	return -1
 }
 
-func mergeTaskOptions(oldTaskOption, newTaskOption tfv1alpha2.TaskOption) tfv1alpha2.TaskOption {
+func mergeTaskOptions(oldTaskOption, newTaskOption tfv1beta1.TaskOption) tfv1beta1.TaskOption {
 	envIndexMap := map[string]int{}
 	envFromIndexMap := map[corev1.EnvFromSource]int{}
 	for i, env := range newTaskOption.Env {
@@ -179,7 +179,7 @@ func (m *mutationHandler) mutate(ar admission.AdmissionReview) *admission.Admiss
 		}
 		log.Println(filename)
 
-		pluginName := tfv1alpha2.TaskName(filename)
+		pluginName := tfv1beta1.TaskName(filename)
 
 		opt, err := newPluginOption(m.pluginMutationsFilepath, filename)
 		if err != nil {
@@ -196,7 +196,7 @@ func (m *mutationHandler) mutate(ar admission.AdmissionReview) *admission.Admiss
 		}
 
 		if terraform.Spec.TaskOptions == nil {
-			terraform.Spec.TaskOptions = []tfv1alpha2.TaskOption{}
+			terraform.Spec.TaskOptions = []tfv1beta1.TaskOption{}
 		}
 
 		taskOptionIndex := findTaskOptionIndex(terraform, pluginName)
@@ -209,7 +209,7 @@ func (m *mutationHandler) mutate(ar admission.AdmissionReview) *admission.Admiss
 			taskOptionIndex = len(terraform.Spec.TaskOptions) - 1
 		}
 		// Ensure ONLY this plugin
-		terraform.Spec.TaskOptions[taskOptionIndex].For = []tfv1alpha2.TaskName{pluginName}
+		terraform.Spec.TaskOptions[taskOptionIndex].For = []tfv1beta1.TaskName{pluginName}
 		if terraform.Spec.TaskOptions[taskOptionIndex].RestartPolicy == "" {
 			terraform.Spec.TaskOptions[taskOptionIndex].RestartPolicy = corev1.RestartPolicyAlways
 		}
@@ -269,8 +269,8 @@ func ls(dir string) []fs.FileInfo {
 	return b
 }
 
-func decodeTerraform(raw []byte) (*tfv1alpha2.Terraform, error) {
-	terraform := tfv1alpha2.Terraform{}
+func decodeTerraform(raw []byte) (*tfv1beta1.Terraform, error) {
+	terraform := tfv1beta1.Terraform{}
 
 	if _, _, err := deserializer.Decode(raw, nil, &terraform); err != nil {
 		return nil, err
@@ -334,8 +334,8 @@ func nilPatch() *admission.AdmissionResponse {
 }
 
 func terraformsResource() metav1.GroupVersionResource {
-	group := tfv1alpha2.SchemeGroupVersion.Group
-	version := tfv1alpha2.SchemeGroupVersion.Version
+	group := tfv1beta1.SchemeGroupVersion.Group
+	version := tfv1beta1.SchemeGroupVersion.Version
 	return metav1.GroupVersionResource{Group: group, Version: version, Resource: "terraforms"}
 }
 
